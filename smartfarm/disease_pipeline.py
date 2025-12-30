@@ -11,7 +11,27 @@ import torch
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoModelForObjectDetection
 
+import os
+import urllib.request
+
 DEFAULT_SAM_CKPT = "/content/sam_vit_b_01ec64.pth"
+SAM_CKPT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
+
+
+def _ensure_sam_checkpoint(path=DEFAULT_SAM_CKPT):
+    if os.path.exists(path) and os.path.getsize(path) > 10_000_000:
+        return path
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    print(f"[SAM] Downloading checkpoint to {path} ...")
+
+    urllib.request.urlretrieve(SAM_CKPT_URL, path)
+
+    if not os.path.exists(path):
+        raise RuntimeError("SAM checkpoint download failed")
+
+    return path
+
 
 @dataclass
 class LeafCandidate:
@@ -109,7 +129,8 @@ def _load_sam(config: LeafCandidateConfig):
     from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
     sam_type = config.get("sam_model_type", "vit_b")
-    sam_ckpt = config.get("sam_checkpoint", DEFAULT_SAM_CKPT)    
+    sam_ckpt = config.get("sam_checkpoint", DEFAULT_SAM_CKPT)
+    sam_ckpt = _ensure_sam_checkpoint(sam_ckpt)    
     sam = sam_model_registry[sam_type](checkpoint=sam_ckpt)
 
     sam.to(device=_get_device())
