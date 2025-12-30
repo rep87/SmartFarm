@@ -18,6 +18,10 @@ DEFAULT_SAM_CKPT = "/content/sam_vit_b_01ec64.pth"
 SAM_CKPT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth"
 
 
+def _cfg(config: Dict[str, object], key: str, default):
+    return config.get(key, default)
+
+
 def _ensure_sam_checkpoint(path=DEFAULT_SAM_CKPT):
     if os.path.exists(path) and os.path.getsize(path) > 10_000_000:
         return path
@@ -69,81 +73,31 @@ class DiseaseAnalysisResult:
     detections: List[DetectionRegion] = field(default_factory=list)
 
 
-@dataclass
-class LeafCandidateConfig:
-    sam_checkpoint: str
-    sam_model_type: str = "vit_b"
-    min_area_ratio: float = 0.01
-    min_green_ratio: float = 0.15
-    min_aspect_ratio: float = 0.2
-    max_aspect_ratio: float = 5.0
-    min_bbox_size: int = 32
-    sam_points_per_side: int = 32
-    sam_pred_iou_thresh: float = 0.86
-    sam_stability_score_thresh: float = 0.92
-    sam_crop_n_layers: int = 1
-    sam_crop_n_points_downscale_factor: int = 2
-    sam_min_mask_region_area: int = 100
-
-
-@dataclass
-class RiskScoringConfig:
-    device: Optional[str] = None
-    top_k: int = 5
-    healthy_label_keywords: Tuple[str, ...] = ("healthy",)
-    model_ids: Dict[str, str] = field(
-        default_factory=lambda: {
-            "mobilenet": "nateraw/plantvillage-mobilenetv2",
-            "efficientnet": "nateraw/plantvillage-efficientnet-b0",
-        }
-    )
-
-
-@dataclass
-class RankingConfig:
-    top_n: int = 5
-
-
-@dataclass
-class DetectionConfig:
-    device: Optional[str] = None
-    model_id: str = "nickmuchi/yolos-small-plant-disease-detection"
-    score_threshold: float = 0.3
-
-
-@dataclass
-class DiseasePipelineConfig:
-    candidate: LeafCandidateConfig
-    scoring: RiskScoringConfig = field(default_factory=RiskScoringConfig)
-    ranking: RankingConfig = field(default_factory=RankingConfig)
-    detection: DetectionConfig = field(default_factory=DetectionConfig)
-
-
 def _get_device(device: Optional[str] = None) -> torch.device:
     if device:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _load_sam(config: LeafCandidateConfig):
+def _load_sam(config: Dict[str, object]):
     from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
-    sam_type = config.get("sam_model_type", "vit_b")
-    sam_ckpt = config.get("sam_checkpoint", DEFAULT_SAM_CKPT)
-    sam_ckpt = _ensure_sam_checkpoint(sam_ckpt)    
+    sam_type = _cfg(config, "sam_model_type", "vit_b")
+    sam_ckpt = _cfg(config, "sam_checkpoint", DEFAULT_SAM_CKPT)
+    sam_ckpt = _ensure_sam_checkpoint(sam_ckpt)
     sam = sam_model_registry[sam_type](checkpoint=sam_ckpt)
 
     sam.to(device=_get_device())
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
-        points_per_side=config.get("sam_points_per_side", 32),
-        pred_iou_thresh=config.get("sam_pred_iou_thresh", 0.88),
-        stability_score_thresh=config.get("sam_stability_score_thresh", 0.92),
-        crop_n_layers=config.get("sam_crop_n_layers", 0),
-        crop_n_points_downscale_factor=config.get(
-            "sam_crop_n_points_downscale_factor", 1
+        points_per_side=_cfg(config, "sam_points_per_side", 32),
+        pred_iou_thresh=_cfg(config, "sam_pred_iou_thresh", 0.88),
+        stability_score_thresh=_cfg(config, "sam_stability_score_thresh", 0.92),
+        crop_n_layers=_cfg(config, "sam_crop_n_layers", 0),
+        crop_n_points_downscale_factor=_cfg(
+            config, "sam_crop_n_points_downscale_factor", 1
         ),
-        min_mask_region_area=config.get("sam_min_mask_region_area", 300),
+        min_mask_region_area=_cfg(config, "sam_min_mask_region_area", 300),
     )
 
     return mask_generator
@@ -165,22 +119,25 @@ def _compute_green_ratio(crop_rgb: np.ndarray, crop_mask: np.ndarray) -> float:
     return float(np.count_nonzero(green_mask)) / float(total)
 
 
-def _is_shape_sane(bbox: Tuple[int, int, int, int], config: LeafCandidateConfig) -> bool:
+def _is_shape_sane(bbox: Tuple[int, int, int, int], config: Dict[str, object]) -> bool:
     _, _, w, h = bbox
-    if min(w, h) < config.min_bbox_size:
+    if min(w, h) < _cfg(config, "min_bbox_size", 32):
         return False
     if h == 0:
         return False
     aspect_ratio = w / float(h)
-    return config.min_aspect_ratio <= aspect_ratio <= config.max_aspect_ratio
+    min_aspect_ratio = _cfg(config, "min_aspect_ratio", 0.2)
+    max_aspect_ratio = _cfg(config, "max_aspect_ratio", 5.0)
+    return min_aspect_ratio <= aspect_ratio <= max_aspect_ratio
 
 
 def extract_leaf_candidates(
-    image_bgr: np.ndarray, config: LeafCandidateConfig
+    image_bgr: np.ndarray, config: Dict[str, object]
 ) -> List[LeafCandidate]:
     if image_bgr is None or image_bgr.ndim != 3:
         raise ValueError("image_bgr must be a HxWx3 array")
 
+    config = config or {}
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     height, width = image_rgb.shape[:2]
     image_area = float(height * width)
@@ -189,13 +146,15 @@ def extract_leaf_candidates(
     masks = mask_generator.generate(image_rgb)
 
     candidates: List[LeafCandidate] = []
+    max_candidates = int(_cfg(config, "max_candidates", 40))
+    crop_pad = int(_cfg(config, "crop_pad", 12))
     for mask_info in masks:
         segmentation = mask_info.get("segmentation")
         if segmentation is None:
             continue
         mask = segmentation.astype(np.uint8)
         area_ratio = float(mask_info.get("area", np.sum(mask))) / image_area
-        if area_ratio < config.min_area_ratio:
+        if area_ratio < _cfg(config, "min_area_ratio", 0.01):
             continue
         bbox_raw = mask_info.get("bbox")
         if not bbox_raw:
@@ -204,20 +163,27 @@ def extract_leaf_candidates(
         bbox = (x, y, w, h)
         if not _is_shape_sane(bbox, config):
             continue
-        crop_rgb = image_rgb[y : y + h, x : x + w]
-        crop_mask = mask[y : y + h, x : x + w]
+        x0 = max(x - crop_pad, 0)
+        y0 = max(y - crop_pad, 0)
+        x1 = min(x + w + crop_pad, width)
+        y1 = min(y + h + crop_pad, height)
+        padded_bbox = (x0, y0, x1 - x0, y1 - y0)
+        crop_rgb = image_rgb[y0:y1, x0:x1]
+        crop_mask = mask[y0:y1, x0:x1]
         green_ratio = _compute_green_ratio(crop_rgb, crop_mask)
-        if green_ratio < config.min_green_ratio:
+        if green_ratio < _cfg(config, "min_green_ratio", 0.25):
             continue
         candidates.append(
             LeafCandidate(
-                bbox=bbox,
+                bbox=padded_bbox,
                 crop_rgb=crop_rgb,
                 mask=mask,
                 area_ratio=area_ratio,
                 green_ratio=green_ratio,
             )
         )
+        if len(candidates) >= max_candidates:
+            break
     return candidates
 
 
@@ -239,12 +205,20 @@ class _HFClassifier:
         return outputs.logits
 
 
-def _load_classifier(model_name: str, config: RiskScoringConfig) -> _HFClassifier:
-    if model_name not in config.model_ids:
-        available = ", ".join(sorted(config.model_ids))
+def _load_classifier(model_name: str, config: Dict[str, object]) -> _HFClassifier:
+    model_ids = _cfg(
+        config,
+        "model_ids",
+        {
+            "mobilenet": "nateraw/plantvillage-mobilenetv2",
+            "efficientnet": "nateraw/plantvillage-efficientnet-b0",
+        },
+    )
+    if model_name not in model_ids:
+        available = ", ".join(sorted(model_ids))
         raise ValueError(f"Unknown model_name '{model_name}'. Available: {available}")
-    model_id = config.model_ids[model_name]
-    device = _get_device(config.device)
+    model_id = model_ids[model_name]
+    device = _get_device(_cfg(config, "device", None))
     return _HFClassifier(model_id, device)
 
 
@@ -255,10 +229,10 @@ def _softmax_entropy(probs: torch.Tensor) -> torch.Tensor:
 def score_leaf_risk(
     crops: Sequence[np.ndarray],
     model_name: str,
-    config: Optional[RiskScoringConfig] = None,
+    config: Optional[Dict[str, object]] = None,
 ) -> List[LeafRiskResult]:
     if config is None:
-        config = RiskScoringConfig()
+        config = {}
 
     if not crops:
         return []
@@ -267,10 +241,11 @@ def score_leaf_risk(
     logits = classifier.predict(crops)
     probs = torch.softmax(logits, dim=-1)
 
-    top_k = min(config.top_k, probs.shape[-1])
+    top_k = min(int(_cfg(config, "top_k", 5)), probs.shape[-1])
     top_probs, top_indices = torch.topk(probs, k=top_k, dim=-1)
     entropy = _softmax_entropy(probs)
 
+    healthy_label_keywords = _cfg(config, "healthy_label_keywords", ("healthy",))
     results: List[LeafRiskResult] = []
     for idx in range(len(crops)):
         labels = [classifier.id2label[int(i)] for i in top_indices[idx].tolist()]
@@ -278,7 +253,7 @@ def score_leaf_risk(
         healthy_probs = [
             float(probs[idx, class_idx].item())
             for class_idx, label in classifier.id2label.items()
-            if any(keyword in label.lower() for keyword in config.healthy_label_keywords)
+            if any(keyword in label.lower() for keyword in healthy_label_keywords)
         ]
         healthy_probability = max(healthy_probs) if healthy_probs else 0.0
         risk_score = 1.0 - healthy_probability
@@ -301,10 +276,10 @@ def score_leaf_risk(
 def rank_risky_leaves(
     candidates: Sequence[LeafCandidate],
     risks: Sequence[LeafRiskResult],
-    config: Optional[RankingConfig] = None,
+    config: Optional[Dict[str, object]] = None,
 ) -> List[LeafRiskResult]:
     if config is None:
-        config = RankingConfig()
+        config = {}
     if len(candidates) != len(risks):
         raise ValueError("candidates and risks must have the same length")
 
@@ -325,7 +300,8 @@ def rank_risky_leaves(
         )
 
     enriched.sort(key=lambda item: (item.risk_score, item.entropy), reverse=True)
-    return enriched[: config.top_n]
+    top_n = int(_cfg(config, "top_n_risky", 8))
+    return enriched[:top_n]
 
 
 class _HFDetector:
@@ -373,30 +349,36 @@ class _HFDetector:
 def _run_classification_pipeline(
     image_bgr: np.ndarray,
     model_name: str,
-    config: DiseasePipelineConfig,
+    config: Dict[str, object],
 ) -> DiseaseAnalysisResult:
-    candidates = extract_leaf_candidates(image_bgr, config.candidate)
+    config = config or {}
+    candidates = extract_leaf_candidates(image_bgr, _cfg(config, "candidate", {}))
     crops = [candidate.crop_rgb for candidate in candidates]
-    risks = score_leaf_risk(crops, model_name, config.scoring)
-    ranked = rank_risky_leaves(candidates, risks, config.ranking)
+    risks = score_leaf_risk(crops, model_name, _cfg(config, "scoring", {}))
+    ranked = rank_risky_leaves(candidates, risks, _cfg(config, "ranking", {}))
     return DiseaseAnalysisResult(model_name=model_name, leaf_results=ranked)
 
 
 def _run_detection_pipeline(
     image_bgr: np.ndarray,
-    config: DetectionConfig,
+    config: Dict[str, object],
 ) -> DiseaseAnalysisResult:
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    device = _get_device(config.device)
-    detector = _HFDetector(config.model_id, device)
-    detections = detector.detect(image_rgb, config.score_threshold)
+    config = config or {}
+    device = _get_device(_cfg(config, "device", None))
+    model_id = _cfg(
+        config, "model_id", "nickmuchi/yolos-small-plant-disease-detection"
+    )
+    score_threshold = float(_cfg(config, "score_threshold", 0.3))
+    detector = _HFDetector(model_id, device)
+    detections = detector.detect(image_rgb, score_threshold)
     return DiseaseAnalysisResult(model_name="yolos", detections=detections)
 
 
 def run_disease_analysis(
     image_bgr: np.ndarray,
     model_name: str,
-    config: DiseasePipelineConfig,
+    config: Dict[str, object],
 ) -> DiseaseAnalysisResult:
     """
     model_name: 'mobilenet' | 'efficientnet' | 'yolos'
@@ -406,20 +388,15 @@ def run_disease_analysis(
     if model_name in ("mobilenet", "efficientnet"):
         return _run_classification_pipeline(image_bgr, model_name, config)
     if model_name == "yolos":
-        return _run_detection_pipeline(image_bgr, config.detection)
+        return _run_detection_pipeline(image_bgr, _cfg(config or {}, "detection", {}))
     raise ValueError("model_name must be one of: 'mobilenet', 'efficientnet', 'yolos'")
 
 
 __all__ = [
     "LeafCandidate",
-    "LeafCandidateConfig",
     "LeafRiskResult",
     "DetectionRegion",
     "DiseaseAnalysisResult",
-    "RiskScoringConfig",
-    "RankingConfig",
-    "DetectionConfig",
-    "DiseasePipelineConfig",
     "extract_leaf_candidates",
     "score_leaf_risk",
     "rank_risky_leaves",
