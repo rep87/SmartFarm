@@ -11,6 +11,7 @@ import torch
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoModelForObjectDetection
 
+DEFAULT_SAM_CKPT = "/content/sam_vit_b_01ec64.pth"
 
 @dataclass
 class LeafCandidate:
