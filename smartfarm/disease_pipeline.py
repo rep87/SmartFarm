@@ -107,11 +107,14 @@ def _get_device(device: Optional[str] = None) -> torch.device:
 def _load_sam(config: LeafCandidateConfig):
     from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
-    sam = sam_model_registry[config.sam_model_type](checkpoint=config.sam_checkpoint)
+    sam_type = config.get("sam_model_type", "vit_b")
+    sam_ckpt = config.get("sam_checkpoint", DEFAULT_SAM_CKPT)    
+    sam = sam_model_registry[sam_type](checkpoint=sam_ckpt)
+
     sam.to(device=_get_device())
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
-        points_per_side=config.sam_points_per_side,
+        points_per_side=config.get("sam_points_per_side", 32)
         pred_iou_thresh=config.sam_pred_iou_thresh,
         stability_score_thresh=config.sam_stability_score_thresh,
         crop_n_layers=config.sam_crop_n_layers,
