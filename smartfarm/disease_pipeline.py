@@ -73,6 +73,13 @@ class DiseaseAnalysisResult:
     detections: List[DetectionRegion] = field(default_factory=list)
 
 
+LeafCandidateConfig = Dict[str, object]
+RiskScoringConfig = Dict[str, object]
+RankingConfig = Dict[str, object]
+DetectionConfig = Dict[str, object]
+DiseasePipelineConfig = Dict[str, object]
+
+
 def _get_device(device: Optional[str] = None) -> torch.device:
     if device:
         return torch.device(device)
@@ -396,7 +403,11 @@ __all__ = [
     "LeafCandidate",
     "LeafRiskResult",
     "DetectionRegion",
+    "DetectionConfig",
     "DiseaseAnalysisResult",
+    "DiseasePipelineConfig",
+    "RankingConfig",
+    "RiskScoringConfig",
     "extract_leaf_candidates",
     "score_leaf_risk",
     "rank_risky_leaves",
