@@ -73,7 +73,6 @@ class DiseaseAnalysisResult:
     detections: List[DetectionRegion] = field(default_factory=list)
 
 
-@dataclass
 def _get_device(device: Optional[str] = None) -> torch.device:
     if device:
         return torch.device(device)
