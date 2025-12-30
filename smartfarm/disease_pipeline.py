@@ -137,12 +137,15 @@ def _load_sam(config: LeafCandidateConfig):
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
         points_per_side=config.get("sam_points_per_side", 32),
-        pred_iou_thresh=config.sam_pred_iou_thresh,
-        stability_score_thresh=config.sam_stability_score_thresh,
-        crop_n_layers=config.sam_crop_n_layers,
-        crop_n_points_downscale_factor=config.sam_crop_n_points_downscale_factor,
-        min_mask_region_area=config.sam_min_mask_region_area,
+        pred_iou_thresh=config.get("sam_pred_iou_thresh", 0.88),
+        stability_score_thresh=config.get("sam_stability_score_thresh", 0.92),
+        crop_n_layers=config.get("sam_crop_n_layers", 0),
+        crop_n_points_downscale_factor=config.get(
+            "sam_crop_n_points_downscale_factor", 1
+        ),
+        min_mask_region_area=config.get("sam_min_mask_region_area", 300),
     )
+
     return mask_generator
 
 
