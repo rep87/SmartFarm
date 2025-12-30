@@ -401,7 +401,6 @@ def run_disease_analysis(
 
 __all__ = [
     "LeafCandidate",
-    "LeafCandidateConfig",
     "LeafRiskResult",
     "DetectionRegion",
     "DetectionConfig",
